@@ -1,6 +1,6 @@
 # 🦾 Scrappy examples for Gemini, Gemma, Imagen, etc.
 
-This repository contains a collection of scrappy, practical examples demonstrating Google's Gemini 1.5 models, Gemma, Imagen, Veo, and potentially others.  These examples are provided as either Chrome Extensions or Google Colab notebooks, and mix and match features for the APIs (ex: Search grounding).
+This repository contains a collection of scrappy, practical examples demonstrating Google's Gemini 1.5 models, Gemma, Imagen, Veo, and potentially others.  These examples are provided as either Chrome Extensions or Google Colab notebooks, and mix and match features for the APIs (ex: Search grounding) and open-source libraries.
 
 ## 🗒️ What's included?
 
