@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Book Inventory Camera</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google AI SDK -->
+    <script type="module">
+        import { GoogleGenerativeAI } from "https://esm.run/@google/generative-ai";
+        window.GoogleGenerativeAI = GoogleGenerativeAI; // Make it globally accessible for the main script
+    </script>
+    <style>
+      /* Basic styling for the video/canvas */
+      /* Basic styling for the video/canvas */
+      #cameraFeed, #captureCanvas {
+        max-width: 100%;
+        height: auto;
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
+        border-radius: 0.5rem; /* rounded-lg */
+        background-color: #e5e7eb; /* bg-gray-200 */
+      }
+      #captureCanvas {
+        display: none; /* Initially hidden */
+      }
+      /* Style for inventory items */
+      .book-item img {
+        max-width: 100px; /* Limit image preview size */
+        height: auto;
+        object-fit: cover;
+        border-radius: 0.25rem; /* rounded-sm */
+      }
+    </style>
+    <script>
+      // Tailwind Configuration (optional, for theme customization)
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+          }
+        }
+      }
+    </script>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 font-sans flex flex-col items-center min-h-screen p-4 sm:p-6">
+
+    <div class="w-full max-w-2xl bg-white rounded-xl shadow-lg p-6 sm:p-8 space-y-6">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">📚 Book Inventory Camera</h1>
+
+        <div class="border border-gray-200 rounded-lg p-4 shadow-sm bg-gray-50">
+            <div id="cameraError" class="text-red-600 mb-4 hidden p-3 bg-red-100 border border-red-300 rounded-md"></div>
+            <video id="cameraFeed" playsinline autoplay class="w-full h-auto rounded-lg bg-gray-200 border border-gray-300"></video>
+            <canvas id="captureCanvas" class="w-full h-auto rounded-lg bg-gray-200 border border-gray-300"></canvas>
+            <button id="captureButton" class="mt-4 w-full flex items-center justify-center bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-lg transition duration-200 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
+                <span class="mr-2 text-xl" aria-hidden="true">📸</span> Capture Photo
+            </button>
+        </div>
+
+        <div id="detailsArea" class="space-y-4 hidden border border-gray-200 rounded-lg p-4 bg-gray-50 shadow-sm">
+            <h2 class="text-xl font-semibold text-gray-700 mb-3">Enter Book Details:</h2>
+            <div>
+                <label for="bookTitle" class="block text-sm font-medium text-gray-700 mb-1">Title:</label>
+                <input type="text" id="bookTitle" name="bookTitle" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="Book Title">
+            </div>
+             <div>
+                <label for="bookAuthor" class="block text-sm font-medium text-gray-700 mb-1">Author:</label>
+                <input type="text" id="bookAuthor" name="bookAuthor" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="Author Name">
+            </div>
+            <div class="flex flex-col sm:flex-row gap-3 mt-4">
+                <button id="saveButton" class="w-full sm:w-1/2 flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg transition duration-200 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span class="mr-2 text-xl" aria-hidden="true">💾</span> Save Book
+                </button>
+                <button id="retakeButton" class="w-full sm:w-1/2 flex items-center justify-center bg-amber-500 hover:bg-amber-600 text-white font-semibold py-3 px-4 rounded-lg transition duration-200 shadow-sm hover:shadow-md">
+                    <span class="mr-2 text-xl" aria-hidden="true">🔄</span> Retake Photo
+                </button>
+            </div>
+        </div>
+        <div id="statusMessage" class="text-center text-sm font-medium mt-4 p-2 rounded-md min-h-[36px]"></div>
+
+        <div class="mt-8">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4 border-t border-gray-200 pt-6">My Books</h2>
+            <div id="inventoryList" class="space-y-3">
+                <p id="loadingIndicator" class="text-gray-500">Loading inventory...</p>
+                 <p id="emptyInventory" class="text-gray-500 hidden">No books saved yet.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Constants ---
+        // IMPORTANT: Replace "YOUR_API_KEY" with your actual Google AI Gemini API Key
+        // This is NOT secure for production. Use a backend proxy for real applications.
+        const GEMINI_API_KEY = "GEMINI_API_KEY";
+        const GEMINI_MODEL_NAME = "gemini-2.0-flash-lite"; // Use the latest flash model
+
+        // --- DOM Elements ---
+        // --- DOM Elements ---
+        const videoElement = document.getElementById('cameraFeed');
+        const canvasElement = document.getElementById('captureCanvas');
+        const captureButton = document.getElementById('captureButton');
+        const saveButton = document.getElementById('saveButton');
+        const retakeButton = document.getElementById('retakeButton');
+        const bookTitleInput = document.getElementById('bookTitle');
+        const bookAuthorInput = document.getElementById('bookAuthor');
+        const inventoryList = document.getElementById('inventoryList');
+        const detailsArea = document.getElementById('detailsArea');
+        const statusMessage = document.getElementById('statusMessage');
+        const cameraError = document.getElementById('cameraError');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const emptyInventory = document.getElementById('emptyInventory');
+        const context = canvasElement.getContext('2d');
+
+        // --- IndexedDB Setup ---
+        const DB_NAME = 'BookInventoryDB';
+        const STORE_NAME = 'books';
+        let db;
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, 1); // Version 1
+
+                request.onerror = (event) => {
+                    console.error("Database error:", event.target.error);
+                    setStatus('Error opening database.', 'error');
+                    reject(event.target.error);
+                };
+
+                request.onsuccess = (event) => {
+                    db = event.target.result;
+                    console.log("Database opened successfully.");
+                    resolve(db);
+                };
+
+                // This event only runs if the database doesn't exist or needs upgrading
+                request.onupgradeneeded = (event) => {
+                    console.log("Database upgrade needed.");
+                    const dbInstance = event.target.result;
+                    // Create an object store (like a table)
+                    // 'id' will be the key, auto-incrementing
+                    const objectStore = dbInstance.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+
+                    // Create indexes for searching/sorting (optional but good practice)
+                    objectStore.createIndex('title', 'title', { unique: false });
+                    objectStore.createIndex('author', 'author', { unique: false });
+                    objectStore.createIndex('timestamp', 'timestamp', { unique: false });
+
+                    console.log("Object store 'books' created.");
+                };
+            });
+        }
+
+        // --- Camera Functions ---
+        async function startCamera() {
+            setStatus('Initializing camera...');
+            captureButton.disabled = true; // Disable until stream is ready
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }); // Prefer rear camera
+                videoElement.srcObject = stream;
+                videoElement.onloadedmetadata = () => {
+                    // Set canvas dimensions once video metadata is loaded
+                    canvasElement.width = videoElement.videoWidth;
+                    canvasElement.height = videoElement.videoHeight;
+                    console.log(`Camera started: ${videoElement.videoWidth}x${videoElement.videoHeight}`);
+                    captureButton.disabled = false; // Enable capture button
+                    videoElement.classList.remove('hidden');
+                    canvasElement.classList.add('hidden');
+                    detailsArea.classList.add('hidden');
+                    cameraError.classList.add('hidden');
+                    setStatus('Camera ready. Point at a book cover.');
+                };
+            } catch (err) {
+                console.error("Error accessing camera:", err);
+                let message = 'Could not access the camera. Please ensure permission is granted.';
+                if (err.name === 'NotAllowedError') {
+                    message = 'Camera access was denied. Please grant permission in your browser settings and refresh.';
+                } else if (err.name === 'NotFoundError') {
+                    message = 'No camera found on this device.';
+                }
+                cameraError.textContent = message;
+                cameraError.classList.remove('hidden');
+                videoElement.classList.add('hidden'); // Hide video element if error
+                setStatus('Camera initialization failed.', 'error');
+                captureButton.disabled = true;
+            }
+        }
+
+        // --- Capture & Save Functions ---
+        function capturePhoto() {
+            if (!videoElement.srcObject || videoElement.paused || videoElement.ended) {
+                 setStatus('Camera stream not active.', 'error');
+                 return;
+            }
+             console.log('Capturing photo...');
+            // Draw the current video frame onto the canvas
+            context.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+
+            // Show canvas, hide video, show details form
+            canvasElement.classList.remove('hidden');
+            videoElement.classList.add('hidden');
+            detailsArea.classList.remove('hidden');
+            captureButton.classList.add('hidden'); // Hide capture button
+            setStatus('Photo captured. Analyzing with AI...');
+            captureButton.disabled = true; // Keep disabled during analysis
+            saveButton.disabled = true;
+            retakeButton.disabled = true;
+            bookTitleInput.disabled = true;
+            bookAuthorInput.disabled = true;
+
+            // Get image data as base64
+            const imageDataUrl = canvasElement.toDataURL('image/jpeg');
+            // Remove the "data:image/jpeg;base64," prefix for the API
+            const base64ImageData = imageDataUrl.split(',')[1];
+
+            analyzeImageWithGemini(base64ImageData)
+                .then(bookInfo => {
+                    if (bookInfo) {
+                        bookTitleInput.value = bookInfo.title || '';
+                        bookAuthorInput.value = bookInfo.author || '';
+                        setStatus('AI analysis complete. Verify details and save.', 'success');
+                        bookTitleInput.focus();
+                    } else {
+                        // Handle cases where Gemini couldn't extract info
+                        setStatus('AI could not extract details. Please enter manually.', 'warning');
+                        bookTitleInput.focus();
+                    }
+                })
+                .catch(error => {
+                    console.error("Gemini analysis failed:", error);
+                    setStatus(`AI analysis failed: ${error.message}. Please enter manually.`, 'error');
+                    bookTitleInput.focus();
+                })
+                .finally(() => {
+                    // Re-enable buttons and inputs regardless of success/failure
+                    saveButton.disabled = false;
+                    retakeButton.disabled = false;
+                    bookTitleInput.disabled = false;
+                    bookAuthorInput.disabled = false;
+                    // Keep capture button hidden until retake
+                });
+        }
+
+         function retakePhoto() {
+             console.log('Retaking photo...');
+             // Hide canvas, show video, hide details form
+             canvasElement.classList.add('hidden');
+             videoElement.classList.remove('hidden');
+             detailsArea.classList.add('hidden');
+             captureButton.classList.remove('hidden'); // Show capture button
+             // Clear inputs
+             bookTitleInput.value = '';
+             bookAuthorInput.value = '';
+             setStatus('Camera ready. Point at a book cover.');
+             // Ensure inputs are enabled if retake is hit during/after analysis
+             bookTitleInput.disabled = false;
+             bookAuthorInput.disabled = false;
+             saveButton.disabled = false; // Ensure save is enabled
+         }
+
+        // --- Gemini AI Function ---
+        async function analyzeImageWithGemini(base64ImageData) {
+            if (!GEMINI_API_KEY || GEMINI_API_KEY === "YOUR_API_KEY") {
+                throw new Error("Gemini API Key not configured.");
+            }
+            if (!window.GoogleGenerativeAI) {
+                throw new Error("Gemini SDK not loaded.");
+            }
+
+            setStatus('Communicating with Gemini AI...');
+            console.log("Sending image to Gemini...");
+
+            try {
+                const genAI = new window.GoogleGenerativeAI(GEMINI_API_KEY);
+                const model = genAI.getGenerativeModel({ model: GEMINI_MODEL_NAME });
+
+                const prompt = `Analyze this image of a book cover. Extract the book title and the author(s). Respond ONLY with a JSON object containing 'title' and 'author' keys. If you cannot determine either, use null for that value. Example: {"title": "The Great Gatsby", "author": "F. Scott Fitzgerald"}`;
+
+                const imagePart = {
+                    inlineData: {
+                        data: base64ImageData,
+                        mimeType: "image/jpeg"
+                    }
+                };
+
+                const result = await model.generateContent([prompt, imagePart]);
+                const response = await result.response;
+                const text = response.text();
+
+                console.log("Gemini response text:", text);
+
+                // Attempt to parse the JSON response
+                try {
+                    // Clean potential markdown code block fences
+                    const cleanedText = text.replace(/^```json\s*|```$/g, '').trim();
+                    const bookInfo = JSON.parse(cleanedText);
+                    // Basic validation
+                    if (typeof bookInfo === 'object' && bookInfo !== null && ('title' in bookInfo || 'author' in bookInfo)) {
+                        console.log("Parsed book info:", bookInfo);
+                        return {
+                            title: bookInfo.title || null, // Ensure null if missing/falsy
+                            author: bookInfo.author || null
+                        };
+                    } else {
+                        console.warn("Gemini response was not the expected JSON format:", cleanedText);
+                        throw new Error("Invalid JSON structure in response.");
+                    }
+                } catch (parseError) {
+                    console.error("Failed to parse Gemini JSON response:", parseError, "Raw text:", text);
+                    // Fallback: Try simple regex if JSON fails (less reliable)
+                    const titleMatch = text.match(/title["']?\s*:\s*["']([^"']+)["']/i);
+                    const authorMatch = text.match(/author["']?\s*:\s*["']([^"']+)["']/i);
+                    if (titleMatch || authorMatch) {
+                        console.log("Falling back to regex extraction");
+                        return {
+                            title: titleMatch ? titleMatch[1].trim() : null,
+                            author: authorMatch ? authorMatch[1].trim() : null
+                        };
+                    }
+                    throw new Error("Could not parse AI response.");
+                }
+
+            } catch (error) {
+                console.error("Error calling Gemini API:", error);
+                let errorMessage = "Failed to analyze image with AI.";
+                if (error.message.includes("API key not valid")) {
+                    errorMessage = "Invalid Gemini API Key.";
+                } else if (error.message.includes("quota")) {
+                    errorMessage = "Gemini API quota exceeded.";
+                }
+                // Potentially check for safety blocks if the API provides specific errors for that
+                // if (error.response && error.response.promptFeedback && error.response.promptFeedback.blockReason) {
+                //     errorMessage = `Analysis blocked due to: ${error.response.promptFeedback.blockReason}`;
+                // }
+                throw new Error(errorMessage);
+            }
+        }
+
+
+        function saveBook() {
+            const title = bookTitleInput.value.trim();
+            const author = bookAuthorInput.value.trim();
+
+            if (!title || !author) {
+                setStatus('Please enter both title and author.', 'warning');
+                return;
+            }
+
+            setStatus('Saving book...');
+            saveButton.disabled = true;
+            retakeButton.disabled = true;
+
+            canvasElement.toBlob(async (blob) => {
+                if (!blob) {
+                    setStatus('Error creating image blob.', 'error');
+                    saveButton.disabled = false;
+                     retakeButton.disabled = false;
+                    return;
+                }
+
+                const bookRecord = {
+                    title: title,
+                    author: author,
+                    image: blob,
+                    timestamp: new Date()
+                };
+
+                try {
+                    const transaction = db.transaction([STORE_NAME], 'readwrite');
+                    const objectStore = transaction.objectStore(STORE_NAME);
+                    const request = objectStore.add(bookRecord);
+
+                    request.onsuccess = () => {
+                        console.log("Book saved successfully with ID:", request.result);
+                        setStatus('Book saved successfully!', 'success');
+                        // Clear inputs and reset UI
+                        bookTitleInput.value = '';
+                        bookAuthorInput.value = '';
+                        retakePhoto(); // Go back to camera view
+                        displayBooks(); // Refresh the inventory list
+                    };
+
+                    request.onerror = (event) => {
+                        console.error("Error saving book:", event.target.error);
+                        setStatus(`Error saving book: ${event.target.error.message}`, 'error');
+                    };
+
+                     transaction.oncomplete = () => {
+                        console.log("Save transaction completed.");
+                         saveButton.disabled = false; // Re-enable buttons after transaction
+                         retakeButton.disabled = false;
+                     };
+
+                     transaction.onerror = (event) => {
+                         console.error("Save transaction error:", event.target.error);
+                         setStatus(`Transaction error: ${event.target.error.message}`, 'error');
+                         saveButton.disabled = false; // Re-enable buttons on transaction error
+                         retakeButton.disabled = false;
+                     };
+
+                } catch (err) {
+                    console.error("Error starting transaction:", err);
+                    setStatus('Error accessing database for saving.', 'error');
+                     saveButton.disabled = false;
+                     retakeButton.disabled = false;
+                }
+
+            }, 'image/jpeg', 0.9); // Save as JPEG with 90% quality
+        }
+
+        // --- Inventory Display Functions ---
+        function displayBooks() {
+             if (!db) {
+                 console.warn("DB not initialized yet for displayBooks.");
+                 setStatus('Database not ready.', 'warning');
+                 return;
+             }
+            console.log("Displaying books from inventory...");
+            inventoryList.innerHTML = ''; // Clear current list
+            loadingIndicator.classList.remove('hidden'); // Show loading
+            emptyInventory.classList.add('hidden'); // Hide empty message
+
+            let itemsFound = false;
+
+            try {
+                 const transaction = db.transaction([STORE_NAME], 'readonly');
+                 const objectStore = transaction.objectStore(STORE_NAME);
+                 const request = objectStore.openCursor(null, 'prev'); // Get newest first
+
+                 request.onsuccess = (event) => {
+                     const cursor = event.target.result;
+                     if (cursor) {
+                         itemsFound = true;
+                         loadingIndicator.classList.add('hidden'); // Hide loading once first item found
+                         const book = cursor.value;
+
+                         // Create elements for the book item
+                         const itemDiv = document.createElement('div');
+                         itemDiv.className = 'book-item flex items-center space-x-4 p-3 bg-white rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200';
+
+                         const img = document.createElement('img');
+                         // Create a URL for the blob to display the image
+                         const imageUrl = URL.createObjectURL(book.image);
+                         img.src = imageUrl;
+                         img.alt = `Cover of ${book.title}`;
+                         img.onload = () => {
+                             // Optional: Revoke the object URL once the image is loaded if memory is a concern,
+                             // but for a simple list, it might be okay to leave it until page unload.
+                             // URL.revokeObjectURL(imageUrl);
+                         };
+                          img.onerror = () => {
+                             console.warn(`Failed to load image for book ID: ${book.id}`);
+                             img.alt = 'Image load error';
+                             // Optional: Set a placeholder image
+                             // img.src = 'placeholder.png';
+                         };
+
+
+                         const textDiv = document.createElement('div');
+                         textDiv.className = 'flex-grow';
+
+                         const titleP = document.createElement('p');
+                         titleP.className = 'font-semibold text-gray-800';
+                         titleP.textContent = book.title;
+
+                         const authorP = document.createElement('p');
+                         authorP.className = 'text-sm text-gray-600';
+                         authorP.textContent = `by ${book.author}`;
+
+                         const dateP = document.createElement('p');
+                         dateP.className = 'text-xs text-gray-400 mt-1';
+                         dateP.textContent = `Added: ${book.timestamp.toLocaleString()}`;
+
+                         // --- Delete Button ---
+                         const deleteButton = document.createElement('button');
+                         deleteButton.innerHTML = '<span class="text-xl" aria-hidden="true">🗑️</span>'; // Use Emoji
+                         deleteButton.className = 'ml-auto text-red-500 hover:text-red-700 p-2 rounded-full hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300 focus:bg-red-100 transition-colors duration-150';
+                         deleteButton.title = `Delete "${book.title}"`;
+                         deleteButton.setAttribute('aria-label', `Delete ${book.title}`);
+                         deleteButton.onclick = () => deleteBook(book.id);
+
+
+                         textDiv.appendChild(titleP);
+                         textDiv.appendChild(authorP);
+                         textDiv.appendChild(dateP);
+
+                         itemDiv.appendChild(img);
+                         itemDiv.appendChild(textDiv);
+                         itemDiv.appendChild(deleteButton); // Add delete button
+
+                         inventoryList.appendChild(itemDiv);
+
+                         cursor.continue(); // Move to the next item
+                     } else {
+                         console.log("No more entries.");
+                         loadingIndicator.classList.add('hidden'); // Hide loading
+                         if (!itemsFound) {
+                             emptyInventory.classList.remove('hidden'); // Show empty message if no items were found
+                         }
+                     }
+                 };
+
+                 request.onerror = (event) => {
+                     console.error("Error reading inventory:", event.target.error);
+                     setStatus(`Error reading inventory: ${event.target.error.message}`, 'error');
+                     loadingIndicator.classList.add('hidden'); // Hide loading on error
+                 };
+
+                 transaction.oncomplete = () => {
+                    console.log("Inventory display transaction complete.");
+                 };
+                  transaction.onerror = (event) => {
+                     console.error("Inventory display transaction error:", event.target.error);
+                     setStatus(`Transaction error: ${event.target.error.message}`, 'error');
+                 };
+
+            } catch (err) {
+                 console.error("Error starting transaction for display:", err);
+                 setStatus('Error accessing database for display.', 'error');
+                 loadingIndicator.classList.add('hidden'); // Hide loading on error
+            }
+        }
+
+         // --- Delete Function ---
+         function deleteBook(id) {
+             if (!db) {
+                 setStatus('Database not ready.', 'warning');
+                 return;
+             }
+             if (!confirm('Are you sure you want to delete this book?')) {
+                 return;
+             }
+
+             console.log(`Attempting to delete book with ID: ${id}`);
+             setStatus('Deleting book...');
+
+             try {
+                 const transaction = db.transaction([STORE_NAME], 'readwrite');
+                 const objectStore = transaction.objectStore(STORE_NAME);
+                 const request = objectStore.delete(id);
+
+                 request.onsuccess = () => {
+                     console.log(`Book with ID ${id} deleted successfully.`);
+                     setStatus('Book deleted.', 'success');
+                     displayBooks(); // Refresh the list
+                 };
+
+                 request.onerror = (event) => {
+                     console.error(`Error deleting book with ID ${id}:`, event.target.error);
+                     setStatus(`Error deleting book: ${event.target.error.message}`, 'error');
+                 };
+
+                 transaction.oncomplete = () => {
+                     console.log("Delete transaction completed.");
+                 };
+
+                 transaction.onerror = (event) => {
+                     console.error("Delete transaction error:", event.target.error);
+                     setStatus(`Transaction error: ${event.target.error.message}`, 'error');
+                 };
+             } catch (err) {
+                 console.error("Error starting delete transaction:", err);
+                 setStatus('Error accessing database for deletion.', 'error');
+             }
+         }
+
+
+        // --- Utility Functions ---
+        function setStatus(message, type = 'info') {
+            statusMessage.textContent = message;
+            // Clear previous styles more robustly
+            statusMessage.classList.remove('text-green-700', 'bg-green-100', 'border-green-300', 'text-red-700', 'bg-red-100', 'border-red-300', 'text-amber-700', 'bg-amber-100', 'border-amber-300', 'text-indigo-700', 'bg-indigo-100', 'border-indigo-300', 'border');
+            statusMessage.classList.add('border'); // Ensure border is always present for consistent height
+
+            switch (type) {
+                case 'success':
+                    statusMessage.classList.add('text-green-700', 'bg-green-100', 'border-green-300');
+                    break;
+                case 'error':
+                    statusMessage.classList.add('text-red-700', 'bg-red-100', 'border-red-300');
+                    break;
+                case 'warning':
+                     statusMessage.classList.add('text-amber-700', 'bg-amber-100', 'border-amber-300');
+                     break;
+                case 'info':
+                default:
+                    statusMessage.classList.add('text-indigo-700', 'bg-indigo-100', 'border-indigo-300');
+                    break;
+            }
+            // Clear message after a delay for success/info/warning
+            // Clear message after a delay for non-error messages
+            if (type !== 'error') {
+                setTimeout(() => {
+                    if (statusMessage.textContent === message) {
+                        statusMessage.textContent = '';
+                        // Also remove background/border classes when clearing
+                        statusMessage.classList.remove('text-green-700', 'bg-green-100', 'border-green-300', 'text-red-700', 'bg-red-100', 'border-red-300', 'text-amber-700', 'bg-amber-100', 'border-amber-300', 'text-indigo-700', 'bg-indigo-100', 'border-indigo-300', 'border');
+                    }
+                }, 4000); // Clear after 4 seconds
+            }
+        }
+
+
+        // --- Event Listeners ---
+        captureButton.addEventListener('click', capturePhoto);
+        saveButton.addEventListener('click', saveBook);
+        retakeButton.addEventListener('click', retakePhoto);
+
+
+        // --- Initialization ---
+        window.addEventListener('load', async () => {
+            if (!('indexedDB' in window)) {
+                setStatus("This browser doesn't support IndexedDB. Cannot save books.", 'error');
+                captureButton.disabled = true;
+                saveButton.disabled = true;
+                retakeButton.disabled = true;
+                return;
+            }
+             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                 setStatus("getUserMedia() is not supported by your browser. Cannot access camera.", 'error');
+                 captureButton.disabled = true;
+                 saveButton.disabled = true;
+                 retakeButton.disabled = true;
+                 return;
+             }
+
+
+            try {
+                await initDB(); // Initialize DB first
+                await startCamera(); // Then start the camera
+                displayBooks(); // Then display existing books
+            } catch (error) {
+                console.error("Initialization failed:", error);
+                setStatus("App initialization failed. Check console for details.", 'error');
+            }
+        });
+
+         // Clean up camera stream when the page is unloaded
+         window.addEventListener('beforeunload', () => {
+             if (videoElement.srcObject) {
+                 videoElement.srcObject.getTracks().forEach(track => track.stop());
+                 console.log("Camera stream stopped.");
+             }
+         });
+
+    </script>
+
+</body>
+</html>
